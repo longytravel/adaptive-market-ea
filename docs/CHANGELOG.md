@@ -1,22 +1,21 @@
 ﻿# Changelog
 
-## [2.0.0] - Current Version
-### Working
-- Multi-pair monitoring (14 pairs tested)
+## [3.0.0] - 2025-08-26
+### Added
+- Three strategy system (Trend, Range, Breakout)
+- Market state detection for all 26 pairs
+- Strategy performance tracking
+- Daily loss limit protection
+- Enhanced dashboard with strategy stats
+- Color-coded pair status by market state
+
+## [2.0.0] - Previous
+### Added
+- Multi-pair monitoring (14 pairs)
 - Pair grid dashboard
 - Signal detection per pair
-- Spread monitoring
-- Color-coded status
 
-## [1.1.0] - Previous
+## [1.1.0] - Initial
 ### Added
-- Real trading logic
+- Basic trading logic
 - Risk management
-- Stop loss/take profit
-
-## Next: [3.0.0]
-### To Add
-- 3 Strategy System
-- Market state detection
-- 26 pairs support
-- Advanced dashboard

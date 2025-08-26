@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                          AdaptiveMarket_Main.mq4 |
-//|                                    Your Adaptive Market EA v3.0 |
-//|                    Phase 4: 3-Strategy System & Enhanced UI     |
+//|                                    Your Adaptive Market EA v3.1 |
+//|                    Enhanced UI with Chart Buttons & Spacing     |
 //+------------------------------------------------------------------+
-#property copyright "Adaptive Market EA v3.0"
-#property version   "3.00"
+#property copyright "Adaptive Market EA v3.1"
+#property version   "3.10"
 #property strict
 
 // ===== INPUT PARAMETERS =====
@@ -21,9 +21,12 @@ input bool   UseBreakoutStrategy = true;  // Use Breakout Strategy
 input int    ADX_Period = 14;             // ADX Period for trend
 input int    RSI_Period = 14;             // RSI Period for range
 input double MinSpread = 2.0;             // Maximum spread allowed
+input string  Sep3 = "=== DISPLAY SETTINGS ===";
+input ENUM_TIMEFRAMES ChartTimeframe = PERIOD_H1; // Timeframe for opened charts
+input bool   ShowIndicatorsOnChart = true; // Add indicators to opened charts
 
 // ===== GLOBAL VARIABLES =====
-string EA_NAME = "ADAPTIVE MARKET EA v3.0";
+string EA_NAME = "ADAPTIVE MARKET EA v3.1";
 int    MagicNumber = 123456;
 
 // All 26 Forex pairs
@@ -62,6 +65,7 @@ datetime LastSignalTime[];
 double PairProfit[];
 color PairColor[];
 string PairStatus[];
+long ChartIDs[];  // Store chart IDs for each pair
 
 // Performance tracking
 int TotalTrades = 0;
@@ -93,6 +97,7 @@ int OnInit()
    ArrayResize(PairProfit, TotalPairs);
    ArrayResize(PairColor, TotalPairs);
    ArrayResize(PairStatus, TotalPairs);
+   ArrayResize(ChartIDs, TotalPairs);
    
    // Initialize values
    for(int i = 0; i < TotalPairs; i++) {
@@ -101,6 +106,7 @@ int OnInit()
       PairColor[i] = clrGray;
       PairStatus[i] = "WAITING";
       LastSignalTime[i] = 0;
+      ChartIDs[i] = 0;
    }
    
    // Set up display
@@ -142,6 +148,105 @@ void OnTick()
    ManageOpenTrades();
 }
 
+// ===== CHART EVENT HANDLER =====
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+{
+   // Handle button clicks
+   if(id == CHARTEVENT_OBJECT_CLICK) {
+      // Check if it's a chart button
+      if(StringFind(sparam, "BTN_") == 0) {
+         // Extract pair index from button name
+         string indexStr = StringSubstr(sparam, 4);
+         int pairIndex = StringToInteger(indexStr);
+         
+         if(pairIndex >= 0 && pairIndex < TotalPairs) {
+            OpenPairChart(pairIndex);
+         }
+         
+         // Reset button state
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      }
+   }
+}
+
+// ===== OPEN CHART WITH INDICATORS (FIXED) =====
+void OpenPairChart(int index)
+{
+   string symbol = TradePairs[index];
+   
+   // Open new chart if not already open
+   long chartID = ChartOpen(symbol, ChartTimeframe);
+   
+   if(chartID > 0) {
+      ChartIDs[index] = chartID;
+      
+      // Apply template settings
+      ChartSetInteger(chartID, CHART_SHOW_GRID, false);
+      ChartSetInteger(chartID, CHART_COLOR_BACKGROUND, clrBlack);
+      ChartSetInteger(chartID, CHART_COLOR_FOREGROUND, clrWhite);
+      ChartSetInteger(chartID, CHART_COLOR_CANDLE_BULL, clrLime);
+      ChartSetInteger(chartID, CHART_COLOR_CANDLE_BEAR, clrRed);
+      ChartSetInteger(chartID, CHART_SHOW_VOLUMES, false);
+      
+      // Get current state for info
+      MARKET_STATE state = PairState[index];
+      
+      // Create info text on the new chart
+      string infoText = "";
+      infoText = "═══ " + symbol + " ═══\n";
+      infoText += "Strategy: " + StrategyToString(ActiveStrategy[index]) + "\n";
+      infoText += "Market State: " + MarketStateToString(state) + "\n";
+      infoText += "══════════════\n";
+      
+      // Add indicator suggestions based on state
+      switch(state) {
+         case STATE_TREND_UP:
+         case STATE_TREND_DOWN:
+            infoText += "TREND MODE\n";
+            infoText += "Suggested: MA(20,50) + ADX(14)\n";
+            break;
+            
+         case STATE_RANGE:
+            infoText += "RANGE MODE\n";
+            infoText += "Suggested: RSI(14) + Bollinger(20)\n";
+            break;
+            
+         case STATE_BREAKOUT:
+            infoText += "BREAKOUT MODE\n";
+            infoText += "Suggested: ATR(14) + Previous High/Low\n";
+            break;
+            
+         default:
+            infoText += "CHOPPY/WAITING\n";
+            infoText += "Monitor for clear signals\n";
+      }
+      
+      // Add the comment to the new chart
+      ChartSetString(chartID, CHART_COMMENT, infoText);
+      
+      // Create a label on the new chart with info
+      string labelName = "INFO_" + symbol;
+      ObjectCreate(chartID, labelName, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(chartID, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(chartID, labelName, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(chartID, labelName, OBJPROP_YDISTANCE, 30);
+      ObjectSetInteger(chartID, labelName, OBJPROP_COLOR, clrYellow);
+      ObjectSetInteger(chartID, labelName, OBJPROP_FONTSIZE, 9);
+      ObjectSetString(chartID, labelName, OBJPROP_FONT, "Arial Bold");
+      ObjectSetString(chartID, labelName, OBJPROP_TEXT, 
+                     "Add indicators manually: " + 
+                     (state == STATE_RANGE ? "RSI+BB" : 
+                      state == STATE_TREND_UP || state == STATE_TREND_DOWN ? "MA+ADX" : 
+                      state == STATE_BREAKOUT ? "ATR" : "MA"));
+      
+      ChartRedraw(chartID);
+      Print("Opened chart for ", symbol);
+   }
+}
+
 // ===== PAIR ANALYSIS =====
 void AnalyzePair(int index)
 {
@@ -160,7 +265,7 @@ void AnalyzePair(int index)
    
    // Check if spread too high
    if(spread > MinSpread) {
-      PairStatus[index] = "HIGH SPREAD";
+      PairStatus[index] = "SP:" + DoubleToString(spread,1);  // <--- CHANGED: Shows actual spread value
       PairColor[index] = clrOrange;
       return;
    }
@@ -170,7 +275,7 @@ void AnalyzePair(int index)
    
    // Check if we can open new trades
    if(CountAllTrades() >= MaxConcurrentTrades) {
-      PairStatus[index] = "MAX TRADES";
+      PairStatus[index] = "MAX";
       PairColor[index] = clrYellow;
       return;
    }
@@ -212,7 +317,7 @@ void AnalyzePair(int index)
    
    // Update display based on signal
    if(signal > 0) {
-      PairStatus[index] = "BUY SIGNAL";
+      PairStatus[index] = "BUY";
       PairColor[index] = clrLime;
       ActiveStrategy[index] = strategy;
       
@@ -222,7 +327,7 @@ void AnalyzePair(int index)
       }
    }
    else if(signal < 0) {
-      PairStatus[index] = "SELL SIGNAL";
+      PairStatus[index] = "SELL";
       PairColor[index] = clrRed;
       ActiveStrategy[index] = strategy;
       
@@ -449,7 +554,7 @@ void ManageOpenTrades()
 void SetupChart()
 {
    ChartSetInteger(0, CHART_SHOW_GRID, false);
-   ChartSetInteger(0, CHART_COLOR_BACKGROUND, clrBlack);
+   ChartSetInteger(0, CHART_COLOR_BACKGROUND, C'15,15,15');  // Dark gray
    ChartSetInteger(0, CHART_COLOR_FOREGROUND, clrWhite);
    ChartSetInteger(0, CHART_SHOW_VOLUMES, false);
    ChartSetInteger(0, CHART_SHOW_PERIOD_SEP, false);
@@ -459,47 +564,71 @@ void CreateAdvancedDashboard()
 {
    int y = 10;
    
-   // Main title
-   CreateLabel("Title", "╔════════ ADAPTIVE MARKET EA v3.0 ════════╗", 10, y, clrGold, 10); y += 20;
+   // Main title with border
+   CreateLabel("Title", "╔══════════ ADAPTIVE MARKET EA v3.1 ══════════╗", 10, y, clrGold, 11); y += 25;
    
    // Account section
-   CreateLabel("AccTitle", "ACCOUNT STATUS", 15, y, clrYellow, 9); y += 15;
-   CreateLabel("Balance", "Balance: $0.00", 15, y, clrWhite, 9); y += 15;
-   CreateLabel("Equity", "Equity: $0.00", 15, y, clrWhite, 9); y += 15;
-   CreateLabel("Profit", "P/L: $0.00", 15, y, clrWhite, 9); y += 15;
-   CreateLabel("DailyPL", "Daily: $0.00", 15, y, clrWhite, 9); y += 20;
+   CreateLabel("AccTitle", "▼ ACCOUNT STATUS", 15, y, clrYellow, 10); y += 18;
+   CreateLabel("Balance", "Balance: $0.00", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("Equity", "Equity: $0.00", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("Profit", "P/L: $0.00", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("DailyPL", "Daily: $0.00", 20, y, clrWhite, 9); y += 25;
    
    // Strategy section
-   CreateLabel("StratTitle", "STRATEGY PERFORMANCE", 15, y, clrYellow, 9); y += 15;
-   CreateLabel("TrendPerf", "Trend: 0 trades", 15, y, clrWhite, 8); y += 13;
-   CreateLabel("RangePerf", "Range: 0 trades", 15, y, clrWhite, 8); y += 13;
-   CreateLabel("BreakPerf", "Break: 0 trades", 15, y, clrWhite, 8); y += 20;
+   CreateLabel("StratTitle", "▼ STRATEGY PERFORMANCE", 15, y, clrYellow, 10); y += 18;
+   CreateLabel("TrendPerf", "Trend: 0 trades", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("RangePerf", "Range: 0 trades", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("BreakPerf", "Break: 0 trades", 20, y, clrWhite, 9); y += 25;
    
    // Statistics
-   CreateLabel("StatsTitle", "STATISTICS", 15, y, clrYellow, 9); y += 15;
-   CreateLabel("WinRate", "Win Rate: 0%", 15, y, clrWhite, 9); y += 15;
-   CreateLabel("OpenTrades", "Open: 0/5", 15, y, clrWhite, 9); y += 20;
+   CreateLabel("StatsTitle", "▼ STATISTICS", 15, y, clrYellow, 10); y += 18;
+   CreateLabel("WinRate", "Win Rate: 0%", 20, y, clrWhite, 9); y += 16;
+   CreateLabel("OpenTrades", "Open: 0/5", 20, y, clrWhite, 9); y += 25;
    
-   // Create pair grid
-   CreatePairGrid();
+   // Create improved pair grid with buttons
+   CreateImprovedPairGrid();
 }
 
-void CreatePairGrid()
+void CreateImprovedPairGrid()
 {
-   int startX = 250;
-   int startY = 10;
-   int boxW = 70;
-   int boxH = 30;
-   int cols = 6;
+   int startX = 300;  // Moved further right
+   int startY = 40;   // Lower start
+   int boxW = 130;    // Even wider boxes
+   int boxH = 55;     // Even taller boxes
+   int cols = 4;      // Only 4 columns for more space
+   
+   // Grid title
+   CreateLabel("GridTitle", "===== CURRENCY PAIR MONITOR (Click ? to open charts) =====", 
+               startX, startY - 25, clrAqua, 10);
    
    for(int i = 0; i < TotalPairs; i++) {
       int col = i % cols;
       int row = i / cols;
-      int x = startX + (col * (boxW + 3));
-      int y = startY + (row * (boxH + 3));
+      int x = startX + (col * (boxW + 15));  // Much more spacing between columns
+      int y = startY + (row * (boxH + 8));   // More spacing between rows
       
-      CreateLabel("P_" + IntegerToString(i), TradePairs[i], x, y, clrWhite, 8);
-      CreateLabel("S_" + IntegerToString(i), "Wait", x, y + 12, clrGray, 7);
+      // Create button for chart
+      string btnName = "BTN_" + IntegerToString(i);
+      ObjectCreate(0, btnName, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, btnName, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, btnName, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, btnName, OBJPROP_XSIZE, 25);
+      ObjectSetInteger(0, btnName, OBJPROP_YSIZE, 18);
+      ObjectSetString(0, btnName, OBJPROP_TEXT, "?");  // Changed to ?
+      ObjectSetString(0, btnName, OBJPROP_FONT, "Arial Bold");
+      ObjectSetInteger(0, btnName, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, btnName, OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, clrDarkGray);
+      ObjectSetInteger(0, btnName, OBJPROP_BORDER_COLOR, clrGray);
+      
+      // Pair name (moved right for button)
+      CreateLabel("P_" + IntegerToString(i), TradePairs[i], x + 30, y + 1, clrWhite, 10);
+      
+      // Status below pair name with more space
+      CreateLabel("S_" + IntegerToString(i), "WAIT", x + 30, y + 18, clrGray, 9);
+      
+      // Spread info with more space
+      CreateLabel("SP_" + IntegerToString(i), "Sp:0.0", x + 30, y + 35, clrGray, 8);
    }
 }
 
@@ -523,12 +652,29 @@ void UpdateMainDashboard()
    ObjectSetString(0, "WinRate", OBJPROP_TEXT, "Win Rate: " + DoubleToString(winRate, 1) + "%");
    ObjectSetString(0, "OpenTrades", OBJPROP_TEXT, "Open: " + IntegerToString(CountAllTrades()) + "/5");
    
-   // Update pair displays
+   // Update pair displays with better formatting
    for(int i = 0; i < TotalPairs; i++) {
+      // Update status
       ObjectSetString(0, "S_" + IntegerToString(i), OBJPROP_TEXT, PairStatus[i]);
       ObjectSetInteger(0, "S_" + IntegerToString(i), OBJPROP_COLOR, PairColor[i]);
+      
+      // Update pair name color
       ObjectSetInteger(0, "P_" + IntegerToString(i), OBJPROP_COLOR, 
                       PairTrades[i] > 0 ? clrAqua : clrWhite);
+      
+      // Update spread
+      ObjectSetString(0, "SP_" + IntegerToString(i), OBJPROP_TEXT, 
+                     "Sp:" + DoubleToString(PairSpread[i], 1));
+      
+      // Update button color based on state
+      string btnName = "BTN_" + IntegerToString(i);
+      if(PairTrades[i] > 0) {
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, clrLime);
+      } else if(PairColor[i] == clrRed || PairColor[i] == clrLime) {
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, clrYellow);
+      } else {
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, clrSilver);
+      }
    }
 }
 
@@ -578,13 +724,14 @@ double GetTotalProfit()
 string MarketStateToString(MARKET_STATE state)
 {
    switch(state) {
-      case STATE_TREND_UP: return "TREND↑";
-      case STATE_TREND_DOWN: return "TREND↓";
-      case STATE_RANGE: return "RANGE";
-      case STATE_BREAKOUT: return "BREAK";
-      default: return "WAIT";
+      case STATE_TREND_UP:   return "BULL";      // Clear bullish
+      case STATE_TREND_DOWN: return "BEAR";      // Clear bearish
+      case STATE_RANGE:      return "RANGE";
+      case STATE_BREAKOUT:   return "BREAK";
+      default:               return "WAIT";
    }
 }
+
 
 string StrategyToString(STRATEGY_TYPE strategy)
 {
@@ -624,6 +771,6 @@ void CreateLabel(string name, string text, int x, int y, color clr, int size)
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
-   ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial");
    ObjectSetString(0, name, OBJPROP_TEXT, text);
 }

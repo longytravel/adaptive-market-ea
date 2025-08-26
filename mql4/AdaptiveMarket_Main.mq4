@@ -1,75 +1,115 @@
 //+------------------------------------------------------------------+
 //|                                          AdaptiveMarket_Main.mq4 |
-//|                                    Your Adaptive Market EA v2.0 |
-//|                               Phase 3: Multi-Pair & Dashboard   |
+//|                                    Your Adaptive Market EA v3.0 |
+//|                    Phase 4: 3-Strategy System & Enhanced UI     |
 //+------------------------------------------------------------------+
-#property copyright "Adaptive Market EA"
-#property version   "2.00"
+#property copyright "Adaptive Market EA v3.0"
+#property version   "3.00"
 #property strict
 
 // ===== INPUT PARAMETERS =====
+input string  Sep1 = "=== RISK MANAGEMENT ===";
 input double RiskPercentage = 1.0;        // Risk % per trade
 input int    MaxConcurrentTrades = 5;     // Maximum open trades
 input int    StopLoss = 50;               // Stop Loss in pips
 input int    TakeProfit = 100;            // Take Profit in pips
-input double MinLotSize = 0.01;           // Minimum lot size
-input double MaxLotSize = 0.10;           // Maximum lot size
-input bool   TradeAllPairs = true;        // Trade all pairs
+input double MaxDailyLoss = 3.0;          // Max daily loss %
+input string  Sep2 = "=== STRATEGY SETTINGS ===";
+input bool   UseTrendStrategy = true;     // Use Trend Strategy
+input bool   UseRangeStrategy = true;     // Use Range Strategy  
+input bool   UseBreakoutStrategy = true;  // Use Breakout Strategy
+input int    ADX_Period = 14;             // ADX Period for trend
+input int    RSI_Period = 14;             // RSI Period for range
+input double MinSpread = 2.0;             // Maximum spread allowed
 
 // ===== GLOBAL VARIABLES =====
-string EA_NAME = "Adaptive Market EA";
+string EA_NAME = "ADAPTIVE MARKET EA v3.0";
 int    MagicNumber = 123456;
 
-// Forex pairs to monitor
+// All 26 Forex pairs
 string TradePairs[] = {
    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-   "EURJPY", "GBPJPY", "EURGBP", "EURAUD", "EURCAD", "GBPAUD", "GBPCAD"
+   "EURJPY", "GBPJPY", "EURAUD", "EURCAD", "EURCHF", "EURGBP", "EURNZD",
+   "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD", "AUDJPY", "CADJPY", "CHFJPY",
+   "NZDJPY", "AUDCAD", "AUDCHF", "AUDNZD", "CADCHF"
 };
-int TotalPairs = 14;  // Start with 14 major pairs
+int TotalPairs = 26;
 
-// Arrays to store pair data
+// Market states
+enum MARKET_STATE {
+   STATE_TREND_UP,
+   STATE_TREND_DOWN,
+   STATE_RANGE,
+   STATE_BREAKOUT,
+   STATE_CHOPPY
+};
+
+// Strategy types
+enum STRATEGY_TYPE {
+   STRATEGY_NONE,
+   STRATEGY_TREND,
+   STRATEGY_RANGE,
+   STRATEGY_BREAKOUT
+};
+
+// Arrays for pair management
+MARKET_STATE PairState[];
+STRATEGY_TYPE ActiveStrategy[];
 double PairSpread[];
-double PairTrend[];
-double PairSignal[];
-datetime PairLastCheck[];
-int PairOpenTrades[];
-string PairStatus[];
+double PairStrength[];
+int PairTrades[];
+datetime LastSignalTime[];
+double PairProfit[];
 color PairColor[];
+string PairStatus[];
 
-// Statistics
+// Performance tracking
 int TotalTrades = 0;
-int WinningTrades = 0;
-double TodayProfit = 0;
-datetime TodayStart;
+int WinTrades = 0;
+int LossTrades = 0;
+int TrendTrades = 0;
+int RangeTrades = 0;
+int BreakoutTrades = 0;
+double DailyStartBalance;
+datetime DailyStartTime;
 
 // ===== INITIALIZATION =====
 int OnInit()
 {
-   Print("=================================");
-   Print(EA_NAME + " v2.0 - MULTI-PAIR");
-   Print("Monitoring ", TotalPairs, " pairs");
-   Print("=================================");
+   Print("═══════════════════════════════════════");
+   Print(EA_NAME + " INITIALIZING");
+   Print("Account Balance: $", AccountBalance());
+   Print("Monitoring: ", TotalPairs, " pairs");
+   Print("Strategies: Trend, Range, Breakout");
+   Print("═══════════════════════════════════════");
    
    // Initialize arrays
+   ArrayResize(PairState, TotalPairs);
+   ArrayResize(ActiveStrategy, TotalPairs);
    ArrayResize(PairSpread, TotalPairs);
-   ArrayResize(PairTrend, TotalPairs);
-   ArrayResize(PairSignal, TotalPairs);
-   ArrayResize(PairLastCheck, TotalPairs);
-   ArrayResize(PairOpenTrades, TotalPairs);
-   ArrayResize(PairStatus, TotalPairs);
+   ArrayResize(PairStrength, TotalPairs);
+   ArrayResize(PairTrades, TotalPairs);
+   ArrayResize(LastSignalTime, TotalPairs);
+   ArrayResize(PairProfit, TotalPairs);
    ArrayResize(PairColor, TotalPairs);
+   ArrayResize(PairStatus, TotalPairs);
    
-   // Set up chart
+   // Initialize values
+   for(int i = 0; i < TotalPairs; i++) {
+      PairState[i] = STATE_CHOPPY;
+      ActiveStrategy[i] = STRATEGY_NONE;
+      PairColor[i] = clrGray;
+      PairStatus[i] = "WAITING";
+      LastSignalTime[i] = 0;
+   }
+   
+   // Set up display
    SetupChart();
+   CreateAdvancedDashboard();
    
-   // Create main dashboard
-   CreateMainDashboard();
-   
-   // Create pair grid
-   CreatePairGrid();
-   
-   // Initialize today's start
-   TodayStart = iTime(Symbol(), PERIOD_D1, 0);
+   // Initialize daily tracking
+   DailyStartBalance = AccountBalance();
+   DailyStartTime = iTime(Symbol(), PERIOD_D1, 0);
    
    return(INIT_SUCCEEDED);
 }
@@ -78,116 +118,244 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    ObjectsDeleteAll(0);
-   Print("EA Stopped. Total trades: ", TotalTrades);
+   Print("EA Stopped. Total: ", TotalTrades, " | Win: ", WinTrades, " | Loss: ", LossTrades);
 }
 
 // ===== MAIN TICK FUNCTION =====
 void OnTick()
 {
-   // Update main stats
+   // Check daily loss limit
+   if(CheckDailyLossLimit()) return;
+   
+   // Update main dashboard
    UpdateMainDashboard();
    
-   // Check each pair
+   // Analyze each pair
    for(int i = 0; i < TotalPairs; i++) {
-      CheckPair(i);
-      UpdatePairDisplay(i);
+      AnalyzePair(i);
    }
    
-   // Manage open trades
+   // Update strategy panel
+   UpdateStrategyPanel();
+   
+   // Manage existing trades
    ManageOpenTrades();
 }
 
 // ===== PAIR ANALYSIS =====
-void CheckPair(int pairIndex)
+void AnalyzePair(int index)
 {
-   string symbol = TradePairs[pairIndex];
+   string symbol = TradePairs[index];
    
-   // Skip if symbol doesn't exist
+   // Check if symbol exists
    if(MarketInfo(symbol, MODE_BID) == 0) {
-      PairStatus[pairIndex] = "OFFLINE";
-      PairColor[pairIndex] = clrGray;
+      PairStatus[index] = "OFFLINE";
+      PairColor[index] = clrDarkGray;
       return;
    }
-   
-   // Check only once per minute per pair
-   if(TimeCurrent() - PairLastCheck[pairIndex] < 60) return;
-   PairLastCheck[pairIndex] = TimeCurrent();
    
    // Get spread
    double spread = MarketInfo(symbol, MODE_SPREAD) / 10.0;
-   PairSpread[pairIndex] = spread;
+   PairSpread[index] = spread;
    
-   // Check if we can trade this pair
-   PairOpenTrades[pairIndex] = CountPairTrades(symbol);
+   // Check if spread too high
+   if(spread > MinSpread) {
+      PairStatus[index] = "HIGH SPREAD";
+      PairColor[index] = clrOrange;
+      return;
+   }
+   
+   // Count open trades
+   PairTrades[index] = CountPairTrades(symbol);
+   
+   // Check if we can open new trades
    if(CountAllTrades() >= MaxConcurrentTrades) {
-      PairStatus[pairIndex] = "MAX";
-      PairColor[pairIndex] = clrYellow;
+      PairStatus[index] = "MAX TRADES";
+      PairColor[index] = clrYellow;
       return;
    }
    
-   if(PairOpenTrades[pairIndex] > 0) {
-      PairStatus[pairIndex] = "IN TRADE";
-      PairColor[pairIndex] = clrAqua;
-      return;
+   // Check cooldown (5 minutes between signals)
+   if(TimeCurrent() - LastSignalTime[index] < 300) return;
+   
+   // Detect market state
+   MARKET_STATE state = DetectMarketState(symbol);
+   PairState[index] = state;
+   
+   // Choose strategy based on market state
+   STRATEGY_TYPE strategy = STRATEGY_NONE;
+   int signal = 0;
+   
+   switch(state) {
+      case STATE_TREND_UP:
+      case STATE_TREND_DOWN:
+         if(UseTrendStrategy) {
+            strategy = STRATEGY_TREND;
+            signal = GetTrendSignal(symbol, state);
+         }
+         break;
+         
+      case STATE_RANGE:
+         if(UseRangeStrategy) {
+            strategy = STRATEGY_RANGE;
+            signal = GetRangeSignal(symbol);
+         }
+         break;
+         
+      case STATE_BREAKOUT:
+         if(UseBreakoutStrategy) {
+            strategy = STRATEGY_BREAKOUT;
+            signal = GetBreakoutSignal(symbol);
+         }
+         break;
    }
    
-   // Check for signals
-   int signal = GetSignal(symbol);
-   PairSignal[pairIndex] = signal;
-   
-   if(signal == 1) {
-      PairStatus[pairIndex] = "BUY SIGNAL";
-      PairColor[pairIndex] = clrLime;
-      if(spread < 2.0 && TradeAllPairs) {
-         OpenPairTrade(symbol, OP_BUY);
+   // Update display based on signal
+   if(signal > 0) {
+      PairStatus[index] = "BUY SIGNAL";
+      PairColor[index] = clrLime;
+      ActiveStrategy[index] = strategy;
+      
+      if(PairTrades[index] == 0) {
+         ExecuteTrade(symbol, OP_BUY, strategy);
+         LastSignalTime[index] = TimeCurrent();
       }
-   } else if(signal == -1) {
-      PairStatus[pairIndex] = "SELL SIGNAL";
-      PairColor[pairIndex] = clrRed;
-      if(spread < 2.0 && TradeAllPairs) {
-         OpenPairTrade(symbol, OP_SELL);
+   }
+   else if(signal < 0) {
+      PairStatus[index] = "SELL SIGNAL";
+      PairColor[index] = clrRed;
+      ActiveStrategy[index] = strategy;
+      
+      if(PairTrades[index] == 0) {
+         ExecuteTrade(symbol, OP_SELL, strategy);
+         LastSignalTime[index] = TimeCurrent();
       }
-   } else {
-      PairStatus[pairIndex] = "WAITING";
-      PairColor[pairIndex] = clrWhite;
+   }
+   else {
+      PairStatus[index] = MarketStateToString(state);
+      PairColor[index] = GetStateColor(state);
+      ActiveStrategy[index] = STRATEGY_NONE;
    }
 }
 
-// ===== GET TRADING SIGNAL =====
-int GetSignal(string symbol)
+// ===== MARKET STATE DETECTION =====
+MARKET_STATE DetectMarketState(string symbol)
 {
-   // Simple MA crossover for now
+   // Get indicators
+   double adx = iADX(symbol, PERIOD_H1, ADX_Period, PRICE_CLOSE, MODE_MAIN, 0);
+   double atr = iATR(symbol, PERIOD_H1, 14, 0);
+   double atr_avg = 0;
+   for(int i = 1; i <= 20; i++) {
+      atr_avg += iATR(symbol, PERIOD_H1, 14, i);
+   }
+   atr_avg /= 20;
+   
+   // Trend detection
+   double ma20 = iMA(symbol, PERIOD_H1, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+   double ma50 = iMA(symbol, PERIOD_H1, 50, 0, MODE_SMA, PRICE_CLOSE, 0);
+   double price = MarketInfo(symbol, MODE_BID);
+   
+   // Strong trend
+   if(adx > 25) {
+      if(ma20 > ma50 && price > ma20) return STATE_TREND_UP;
+      if(ma20 < ma50 && price < ma20) return STATE_TREND_DOWN;
+   }
+   
+   // Breakout conditions
+   if(atr > atr_avg * 1.5) {
+      return STATE_BREAKOUT;
+   }
+   
+   // Range conditions
+   if(adx < 20 && atr < atr_avg) {
+      return STATE_RANGE;
+   }
+   
+   return STATE_CHOPPY;
+}
+
+// ===== STRATEGY SIGNALS =====
+
+// TREND STRATEGY
+int GetTrendSignal(string symbol, MARKET_STATE state)
+{
    double ma_fast = iMA(symbol, PERIOD_H1, 20, 0, MODE_SMA, PRICE_CLOSE, 1);
    double ma_slow = iMA(symbol, PERIOD_H1, 50, 0, MODE_SMA, PRICE_CLOSE, 1);
    double ma_fast_prev = iMA(symbol, PERIOD_H1, 20, 0, MODE_SMA, PRICE_CLOSE, 2);
    double ma_slow_prev = iMA(symbol, PERIOD_H1, 50, 0, MODE_SMA, PRICE_CLOSE, 2);
    
    // Buy signal
-   if(ma_fast_prev <= ma_slow_prev && ma_fast > ma_slow) {
+   if(state == STATE_TREND_UP && ma_fast_prev <= ma_slow_prev && ma_fast > ma_slow) {
       return 1;
    }
    
    // Sell signal
-   if(ma_fast_prev >= ma_slow_prev && ma_fast < ma_slow) {
+   if(state == STATE_TREND_DOWN && ma_fast_prev >= ma_slow_prev && ma_fast < ma_slow) {
       return -1;
    }
    
-   return 0;  // No signal
+   return 0;
 }
 
-// ===== OPEN TRADE FOR SPECIFIC PAIR =====
-void OpenPairTrade(string symbol, int orderType)
+// RANGE STRATEGY
+int GetRangeSignal(string symbol)
+{
+   double rsi = iRSI(symbol, PERIOD_H1, RSI_Period, PRICE_CLOSE, 0);
+   double bb_upper = iBands(symbol, PERIOD_H1, 20, 2, 0, PRICE_CLOSE, MODE_UPPER, 0);
+   double bb_lower = iBands(symbol, PERIOD_H1, 20, 2, 0, PRICE_CLOSE, MODE_LOWER, 0);
+   double price = MarketInfo(symbol, MODE_BID);
+   
+   // Buy signal - oversold
+   if(rsi < 30 && price <= bb_lower) {
+      return 1;
+   }
+   
+   // Sell signal - overbought
+   if(rsi > 70 && price >= bb_upper) {
+      return -1;
+   }
+   
+   return 0;
+}
+
+// BREAKOUT STRATEGY
+int GetBreakoutSignal(string symbol)
+{
+   // Get previous day high/low
+   double prev_high = iHigh(symbol, PERIOD_D1, 1);
+   double prev_low = iLow(symbol, PERIOD_D1, 1);
+   double current_price = MarketInfo(symbol, MODE_BID);
+   
+   // Check for breakout with momentum
+   double momentum = iMomentum(symbol, PERIOD_H1, 14, PRICE_CLOSE, 0);
+   
+   // Buy breakout
+   if(current_price > prev_high && momentum > 100.5) {
+      return 1;
+   }
+   
+   // Sell breakout
+   if(current_price < prev_low && momentum < 99.5) {
+      return -1;
+   }
+   
+   return 0;
+}
+
+// ===== TRADE EXECUTION =====
+void ExecuteTrade(string symbol, int orderType, STRATEGY_TYPE strategy)
 {
    // Calculate lot size
-   double lotSize = CalculatePairLotSize(symbol);
+   double lotSize = CalculateLotSize(symbol);
    
-   // Get pip value for this pair
+   // Get pip value
    double pipValue = MarketInfo(symbol, MODE_POINT);
    if(MarketInfo(symbol, MODE_DIGITS) == 3 || MarketInfo(symbol, MODE_DIGITS) == 5) {
       pipValue *= 10;
    }
    
    double price, sl, tp;
+   string comment = StrategyToString(strategy) + " #" + IntegerToString(TotalTrades + 1);
    
    RefreshRates();
    
@@ -196,49 +364,70 @@ void OpenPairTrade(string symbol, int orderType)
       sl = price - StopLoss * pipValue;
       tp = price + TakeProfit * pipValue;
       
-      int ticket = OrderSend(symbol, OP_BUY, lotSize, price, 3, sl, tp, 
-                            EA_NAME, MagicNumber, 0, clrGreen);
+      int ticket = OrderSend(symbol, OP_BUY, lotSize, price, 3, sl, tp, comment, MagicNumber, 0, clrGreen);
       
       if(ticket > 0) {
          TotalTrades++;
-         Print("✓ BUY ", symbol, " Lot:", lotSize);
+         UpdateStrategyCount(strategy);
+         Print("✓ ", StrategyToString(strategy), " BUY ", symbol, " Lot:", lotSize);
          PlaySound("ok.wav");
       }
-   } else {
+   }
+   else if(orderType == OP_SELL) {
       price = MarketInfo(symbol, MODE_BID);
       sl = price + StopLoss * pipValue;
       tp = price - TakeProfit * pipValue;
       
-      int ticket = OrderSend(symbol, OP_SELL, lotSize, price, 3, sl, tp, 
-                            EA_NAME, MagicNumber, 0, clrRed);
+      int ticket = OrderSend(symbol, OP_SELL, lotSize, price, 3, sl, tp, comment, MagicNumber, 0, clrRed);
       
       if(ticket > 0) {
          TotalTrades++;
-         Print("✓ SELL ", symbol, " Lot:", lotSize);
+         UpdateStrategyCount(strategy);
+         Print("✓ ", StrategyToString(strategy), " SELL ", symbol, " Lot:", lotSize);
          PlaySound("ok.wav");
       }
    }
 }
 
-// ===== LOT SIZE CALCULATION =====
-double CalculatePairLotSize(string symbol)
+// ===== RISK MANAGEMENT =====
+double CalculateLotSize(string symbol)
 {
-   double accountBalance = AccountBalance();
-   double riskAmount = accountBalance * (RiskPercentage / 100.0);
-   
+   double balance = AccountBalance();
+   double riskAmount = balance * (RiskPercentage / 100.0);
    double tickValue = MarketInfo(symbol, MODE_TICKVALUE);
-   if(tickValue == 0) return MinLotSize;
+   
+   if(tickValue == 0) return 0.01;
    
    double lotSize = riskAmount / (StopLoss * tickValue * 10);
-   
-   // Normalize
    double lotStep = MarketInfo(symbol, MODE_LOTSTEP);
+   double minLot = MarketInfo(symbol, MODE_MINLOT);
+   double maxLot = MarketInfo(symbol, MODE_MAXLOT);
+   
    lotSize = MathFloor(lotSize / lotStep) * lotStep;
    
-   if(lotSize < MinLotSize) lotSize = MinLotSize;
-   if(lotSize > MaxLotSize) lotSize = MaxLotSize;
+   if(lotSize < minLot) lotSize = minLot;
+   if(lotSize > maxLot) lotSize = maxLot;
+   if(lotSize > 0.10) lotSize = 0.10; // Extra safety
    
    return NormalizeDouble(lotSize, 2);
+}
+
+bool CheckDailyLossLimit()
+{
+   // Reset daily tracking at new day
+   if(iTime(Symbol(), PERIOD_D1, 0) > DailyStartTime) {
+      DailyStartBalance = AccountBalance();
+      DailyStartTime = iTime(Symbol(), PERIOD_D1, 0);
+   }
+   
+   double currentLoss = (DailyStartBalance - AccountBalance()) / DailyStartBalance * 100;
+   
+   if(currentLoss >= MaxDailyLoss) {
+      Comment("Daily loss limit reached: -", DoubleToString(currentLoss, 2), "%");
+      return true;
+   }
+   
+   return false;
 }
 
 // ===== TRADE MANAGEMENT =====
@@ -247,21 +436,116 @@ void ManageOpenTrades()
    for(int i = OrdersTotal() - 1; i >= 0; i--) {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
          if(OrderMagicNumber() == MagicNumber) {
-            // Could add trailing stop here
+            // Check if trade is profitable
+            if(OrderProfit() > 0) {
+               // Could implement trailing stop here
+            }
          }
       }
    }
 }
 
-// ===== COUNTING FUNCTIONS =====
+// ===== DISPLAY FUNCTIONS =====
+void SetupChart()
+{
+   ChartSetInteger(0, CHART_SHOW_GRID, false);
+   ChartSetInteger(0, CHART_COLOR_BACKGROUND, clrBlack);
+   ChartSetInteger(0, CHART_COLOR_FOREGROUND, clrWhite);
+   ChartSetInteger(0, CHART_SHOW_VOLUMES, false);
+   ChartSetInteger(0, CHART_SHOW_PERIOD_SEP, false);
+}
+
+void CreateAdvancedDashboard()
+{
+   int y = 10;
+   
+   // Main title
+   CreateLabel("Title", "╔════════ ADAPTIVE MARKET EA v3.0 ════════╗", 10, y, clrGold, 10); y += 20;
+   
+   // Account section
+   CreateLabel("AccTitle", "ACCOUNT STATUS", 15, y, clrYellow, 9); y += 15;
+   CreateLabel("Balance", "Balance: $0.00", 15, y, clrWhite, 9); y += 15;
+   CreateLabel("Equity", "Equity: $0.00", 15, y, clrWhite, 9); y += 15;
+   CreateLabel("Profit", "P/L: $0.00", 15, y, clrWhite, 9); y += 15;
+   CreateLabel("DailyPL", "Daily: $0.00", 15, y, clrWhite, 9); y += 20;
+   
+   // Strategy section
+   CreateLabel("StratTitle", "STRATEGY PERFORMANCE", 15, y, clrYellow, 9); y += 15;
+   CreateLabel("TrendPerf", "Trend: 0 trades", 15, y, clrWhite, 8); y += 13;
+   CreateLabel("RangePerf", "Range: 0 trades", 15, y, clrWhite, 8); y += 13;
+   CreateLabel("BreakPerf", "Break: 0 trades", 15, y, clrWhite, 8); y += 20;
+   
+   // Statistics
+   CreateLabel("StatsTitle", "STATISTICS", 15, y, clrYellow, 9); y += 15;
+   CreateLabel("WinRate", "Win Rate: 0%", 15, y, clrWhite, 9); y += 15;
+   CreateLabel("OpenTrades", "Open: 0/5", 15, y, clrWhite, 9); y += 20;
+   
+   // Create pair grid
+   CreatePairGrid();
+}
+
+void CreatePairGrid()
+{
+   int startX = 250;
+   int startY = 10;
+   int boxW = 70;
+   int boxH = 30;
+   int cols = 6;
+   
+   for(int i = 0; i < TotalPairs; i++) {
+      int col = i % cols;
+      int row = i / cols;
+      int x = startX + (col * (boxW + 3));
+      int y = startY + (row * (boxH + 3));
+      
+      CreateLabel("P_" + IntegerToString(i), TradePairs[i], x, y, clrWhite, 8);
+      CreateLabel("S_" + IntegerToString(i), "Wait", x, y + 12, clrGray, 7);
+   }
+}
+
+void UpdateMainDashboard()
+{
+   static datetime lastUpdate = 0;
+   if(TimeCurrent() - lastUpdate < 1) return;
+   lastUpdate = TimeCurrent();
+   
+   double pl = GetTotalProfit();
+   double dailyPL = AccountBalance() - DailyStartBalance;
+   
+   ObjectSetString(0, "Balance", OBJPROP_TEXT, "Balance: $" + DoubleToString(AccountBalance(), 2));
+   ObjectSetString(0, "Equity", OBJPROP_TEXT, "Equity: $" + DoubleToString(AccountEquity(), 2));
+   ObjectSetString(0, "Profit", OBJPROP_TEXT, "P/L: $" + DoubleToString(pl, 2));
+   ObjectSetInteger(0, "Profit", OBJPROP_COLOR, pl >= 0 ? clrLime : clrRed);
+   ObjectSetString(0, "DailyPL", OBJPROP_TEXT, "Daily: $" + DoubleToString(dailyPL, 2));
+   ObjectSetInteger(0, "DailyPL", OBJPROP_COLOR, dailyPL >= 0 ? clrLime : clrRed);
+   
+   double winRate = TotalTrades > 0 ? (WinTrades * 100.0 / TotalTrades) : 0;
+   ObjectSetString(0, "WinRate", OBJPROP_TEXT, "Win Rate: " + DoubleToString(winRate, 1) + "%");
+   ObjectSetString(0, "OpenTrades", OBJPROP_TEXT, "Open: " + IntegerToString(CountAllTrades()) + "/5");
+   
+   // Update pair displays
+   for(int i = 0; i < TotalPairs; i++) {
+      ObjectSetString(0, "S_" + IntegerToString(i), OBJPROP_TEXT, PairStatus[i]);
+      ObjectSetInteger(0, "S_" + IntegerToString(i), OBJPROP_COLOR, PairColor[i]);
+      ObjectSetInteger(0, "P_" + IntegerToString(i), OBJPROP_COLOR, 
+                      PairTrades[i] > 0 ? clrAqua : clrWhite);
+   }
+}
+
+void UpdateStrategyPanel()
+{
+   ObjectSetString(0, "TrendPerf", OBJPROP_TEXT, "Trend: " + IntegerToString(TrendTrades) + " trades");
+   ObjectSetString(0, "RangePerf", OBJPROP_TEXT, "Range: " + IntegerToString(RangeTrades) + " trades");
+   ObjectSetString(0, "BreakPerf", OBJPROP_TEXT, "Break: " + IntegerToString(BreakoutTrades) + " trades");
+}
+
+// ===== HELPER FUNCTIONS =====
 int CountAllTrades()
 {
    int count = 0;
    for(int i = OrdersTotal() - 1; i >= 0; i--) {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
-         if(OrderMagicNumber() == MagicNumber) {
-            count++;
-         }
+         if(OrderMagicNumber() == MagicNumber) count++;
       }
    }
    return count;
@@ -272,9 +556,7 @@ int CountPairTrades(string symbol)
    int count = 0;
    for(int i = OrdersTotal() - 1; i >= 0; i--) {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
-         if(OrderMagicNumber() == MagicNumber && OrderSymbol() == symbol) {
-            count++;
-         }
+         if(OrderMagicNumber() == MagicNumber && OrderSymbol() == symbol) count++;
       }
    }
    return count;
@@ -293,132 +575,55 @@ double GetTotalProfit()
    return profit;
 }
 
-// ===== DASHBOARD CREATION =====
-void SetupChart()
+string MarketStateToString(MARKET_STATE state)
 {
-   ChartSetInteger(0, CHART_SHOW_GRID, false);
-   ChartSetInteger(0, CHART_COLOR_BACKGROUND, C'20,20,20');
-   ChartSetInteger(0, CHART_COLOR_FOREGROUND, clrWhite);
-   ChartSetInteger(0, CHART_SHOW_PERIOD_SEP, false);
-   ChartSetInteger(0, CHART_SHOW_VOLUMES, false);
-}
-
-void CreateMainDashboard()
-{
-   // Title
-   CreateLabel("Title", "╔═══════════ ADAPTIVE MARKET EA v2.0 ═══════════╗", 
-               10, 10, clrGold, 11);
-   
-   // Account info
-   CreateLabel("AccInfo", "Account Info", 20, 35, clrYellow, 9);
-   CreateLabel("Balance", "Balance: $0", 20, 50, clrWhite, 9);
-   CreateLabel("Equity", "Equity: $0", 20, 65, clrWhite, 9);
-   CreateLabel("Profit", "Profit: $0", 20, 80, clrWhite, 9);
-   CreateLabel("Trades", "Open: 0/5", 20, 95, clrWhite, 9);
-   
-   // Performance
-   CreateLabel("PerfInfo", "Performance", 150, 35, clrYellow, 9);
-   CreateLabel("TodayPL", "Today: $0", 150, 50, clrWhite, 9);
-   CreateLabel("WinRate", "Win Rate: 0%", 150, 65, clrWhite, 9);
-   CreateLabel("TotalT", "Trades: 0", 150, 80, clrWhite, 9);
-}
-
-void CreatePairGrid()
-{
-   int startX = 20;
-   int startY = 130;
-   int boxWidth = 85;
-   int boxHeight = 35;
-   int columns = 7;
-   
-   CreateLabel("GridTitle", "═══ PAIR MONITORING GRID ═══", startX, startY - 15, clrAqua, 10);
-   
-   for(int i = 0; i < TotalPairs; i++) {
-      int col = i % columns;
-      int row = i / columns;
-      int x = startX + (col * (boxWidth + 5));
-      int y = startY + (row * (boxHeight + 5));
-      
-      // Pair name
-      CreateLabel("Pair_" + IntegerToString(i), TradePairs[i], x, y, clrWhite, 8);
-      
-      // Status
-      CreateLabel("Status_" + IntegerToString(i), "LOADING", x, y + 12, clrGray, 8);
-      
-      // Spread
-      CreateLabel("Spread_" + IntegerToString(i), "Spread: 0.0", x, y + 24, clrGray, 7);
+   switch(state) {
+      case STATE_TREND_UP: return "TREND↑";
+      case STATE_TREND_DOWN: return "TREND↓";
+      case STATE_RANGE: return "RANGE";
+      case STATE_BREAKOUT: return "BREAK";
+      default: return "WAIT";
    }
 }
 
-// ===== UPDATE DISPLAYS =====
-void UpdateMainDashboard()
+string StrategyToString(STRATEGY_TYPE strategy)
 {
-   static datetime lastUpdate = 0;
-   if(TimeCurrent() - lastUpdate < 1) return;
-   lastUpdate = TimeCurrent();
-   
-   double profit = GetTotalProfit();
-   
-   ObjectSetString(0, "Balance", OBJPROP_TEXT, 
-                   "Balance: $" + DoubleToString(AccountBalance(), 2));
-   ObjectSetString(0, "Equity", OBJPROP_TEXT, 
-                   "Equity: $" + DoubleToString(AccountEquity(), 2));
-   ObjectSetString(0, "Profit", OBJPROP_TEXT, 
-                   "Profit: $" + DoubleToString(profit, 2));
-   ObjectSetInteger(0, "Profit", OBJPROP_COLOR, profit >= 0 ? clrLime : clrRed);
-   
-   ObjectSetString(0, "Trades", OBJPROP_TEXT, 
-                   "Open: " + IntegerToString(CountAllTrades()) + "/" + 
-                   IntegerToString(MaxConcurrentTrades));
-   
-   // Today's profit
-   if(iTime(Symbol(), PERIOD_D1, 0) > TodayStart) {
-      TodayProfit = 0;
-      TodayStart = iTime(Symbol(), PERIOD_D1, 0);
-   }
-   ObjectSetString(0, "TodayPL", OBJPROP_TEXT, 
-                   "Today: $" + DoubleToString(TodayProfit + profit, 2));
-   
-   double winRate = TotalTrades > 0 ? (WinningTrades * 100.0 / TotalTrades) : 0;
-   ObjectSetString(0, "WinRate", OBJPROP_TEXT, 
-                   "Win Rate: " + DoubleToString(winRate, 1) + "%");
-   ObjectSetString(0, "TotalT", OBJPROP_TEXT, "Trades: " + IntegerToString(TotalTrades));
-}
-
-void UpdatePairDisplay(int i)
-{
-   static datetime lastUpdate[];
-   if(ArraySize(lastUpdate) != TotalPairs) ArrayResize(lastUpdate, TotalPairs);
-   
-   if(TimeCurrent() - lastUpdate[i] < 2) return;
-   lastUpdate[i] = TimeCurrent();
-   
-   // Update status and color
-   ObjectSetString(0, "Status_" + IntegerToString(i), OBJPROP_TEXT, PairStatus[i]);
-   ObjectSetInteger(0, "Status_" + IntegerToString(i), OBJPROP_COLOR, PairColor[i]);
-   
-   // Update spread
-   ObjectSetString(0, "Spread_" + IntegerToString(i), OBJPROP_TEXT, 
-                   "Sp: " + DoubleToString(PairSpread[i], 1));
-   
-   // Color the pair name based on trend
-   if(PairSignal[i] > 0) {
-      ObjectSetInteger(0, "Pair_" + IntegerToString(i), OBJPROP_COLOR, clrLime);
-   } else if(PairSignal[i] < 0) {
-      ObjectSetInteger(0, "Pair_" + IntegerToString(i), OBJPROP_COLOR, clrRed);
-   } else {
-      ObjectSetInteger(0, "Pair_" + IntegerToString(i), OBJPROP_COLOR, clrWhite);
+   switch(strategy) {
+      case STRATEGY_TREND: return "TREND";
+      case STRATEGY_RANGE: return "RANGE";
+      case STRATEGY_BREAKOUT: return "BREAK";
+      default: return "NONE";
    }
 }
 
-void CreateLabel(string name, string text, int x, int y, color clr, int fontSize)
+color GetStateColor(MARKET_STATE state)
+{
+   switch(state) {
+      case STATE_TREND_UP: return clrLimeGreen;
+      case STATE_TREND_DOWN: return clrOrangeRed;
+      case STATE_RANGE: return clrYellow;
+      case STATE_BREAKOUT: return clrMagenta;
+      default: return clrGray;
+   }
+}
+
+void UpdateStrategyCount(STRATEGY_TYPE strategy)
+{
+   switch(strategy) {
+      case STRATEGY_TREND: TrendTrades++; break;
+      case STRATEGY_RANGE: RangeTrades++; break;
+      case STRATEGY_BREAKOUT: BreakoutTrades++; break;
+   }
+}
+
+void CreateLabel(string name, string text, int x, int y, color clr, int size)
 {
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
    ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
    ObjectSetString(0, name, OBJPROP_TEXT, text);
 }

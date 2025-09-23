@@ -1,0 +1,70 @@
+﻿{
+  "updated": "2025-09-22T21:00:00Z",
+  "default": {
+    "bias": 0.0,
+    "risk_multiplier": 1.0,
+    "regime": "balanced",
+    "weights": {
+      "trend": 0.35,
+      "micro": 0.25,
+      "reversion": 0.20,
+      "breakout": 0.20
+    }
+  },
+  "globals": {
+    "sentiment_bias": 0.0,
+    "risk_multiplier": 1.0,
+    "risk_cap": 1.5,
+    "news_block_minutes": 35
+  },
+  "symbols": {
+    "EURUSD": {
+      "bias": 0.12,
+      "risk_multiplier": 1.10,
+      "regime": "trending",
+      "llm_bias": 0.05,
+      "weights": {
+        "trend": 0.45,
+        "micro": 0.20,
+        "reversion": 0.15,
+        "breakout": 0.20
+      }
+    },
+    "GBPUSD": {
+      "bias": 0.08,
+      "risk_multiplier": 1.05,
+      "regime": "volatile",
+      "llm_bias": -0.02,
+      "weights": {
+        "trend": 0.38,
+        "micro": 0.32,
+        "reversion": 0.15,
+        "breakout": 0.15
+      }
+    },
+    "USDJPY": {
+      "bias": -0.05,
+      "risk_multiplier": 0.95,
+      "regime": "mean_reversion",
+      "llm_bias": -0.08,
+      "weights": {
+        "trend": 0.30,
+        "micro": 0.30,
+        "reversion": 0.25,
+        "breakout": 0.15
+      }
+    },
+    "XAUUSD": {
+      "bias": 0.18,
+      "risk_multiplier": 1.20,
+      "regime": "breakout",
+      "llm_bias": 0.10,
+      "weights": {
+        "trend": 0.28,
+        "micro": 0.22,
+        "reversion": 0.18,
+        "breakout": 0.32
+      }
+    }
+  }
+}

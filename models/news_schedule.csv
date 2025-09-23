@@ -1,0 +1,6 @@
+﻿# timestamp,symbol,impact(1=low,2=med,3=high),description
+2025-09-23T08:30:00Z,USD,3,US CPI release
+2025-09-23T09:00:00Z,EUR,2,ECB speakers
+2025-09-23T12:00:00Z,ALL,1,World bank outlook update
+2025-09-23T23:50:00Z,JPY,3,BoJ policy minutes
+2025-09-24T06:00:00Z,GBP,2,UK PMI flash
